@@ -66,6 +66,37 @@ npm start      # 生产（需先 npm run build）
 
 默认端口 3009。
 
+## 生产部署
+
+用 PM2 守护进程：
+
+```bash
+npm run build
+
+# 启动并注册为 PM2 进程
+pm2 start npm --name ekb -- start
+
+# 开机自启
+pm2 save
+pm2 startup
+```
+
+查看状态和日志：
+
+```bash
+pm2 status
+pm2 logs ekb
+```
+
+重启（更新代码后）：
+
+```bash
+git pull
+npm install
+npm run build
+pm2 restart ekb
+```
+
 ## 默认账号
 
 首次启动自动生成 `data/users.json`，内含两个初始账号：
