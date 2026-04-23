@@ -1,0 +1,29 @@
+{
+  "6290efd733d511f18331edb34c751d8f": [
+    {
+      "id": "7417a6c4-6b97-48a2-bb94-031bc391dec1",
+      "name": "协会介绍资料",
+      "docIds": [
+        "36348825389011f1be2847bc4e48f18f",
+        "eacf039137c211f182c247bc4e48f18f",
+        "6b151c9b33d511f18571edb34c751d8f"
+      ]
+    },
+    {
+      "id": "b14f2d81-30c2-4a19-a7ec-782faee4c0dc",
+      "name": "公众号学习资料",
+      "docIds": [
+        "614b24ad381911f1bab547bc4e48f18f",
+        "8b3299f0389a11f1b06c47bc4e48f18f"
+      ]
+    },
+    {
+      "id": "d401958e-21e8-42a4-970b-24727abfc66a",
+      "name": "合同文件",
+      "docIds": [
+        "dbfaf7c1399a11f1a3041dfde45f4f74",
+        "4b11c3753bad11f1a61d1dfde45f4f74"
+      ]
+    }
+  ]
+}

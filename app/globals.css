@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground: #0f172a;
+  --background: #eef2fb;
+  --primary: #3b82f6;
+  --accent: #6366f1;
+  --sidebar-bg: #0f2144;
+  --font: "Segoe UI","Microsoft YaHei","微软雅黑",-apple-system,sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 70% 50% at 15% 0%,   rgba(99,102,241,.10) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 40% at 85% 90%,  rgba(59,130,246,.09) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 60% at 60% 30%,  rgba(139,92,246,.06) 0%, transparent 45%),
+    radial-gradient(ellipse 100% 100% at 50% 50%, #eef2fb 0%, #e8eeff 100%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+@keyframes aurora-float {
+  0%,100% { transform: translate(0,0) scale(1); }
+  33%      { transform: translate(30px,-20px) scale(1.05); }
+  66%      { transform: translate(-20px,15px) scale(.97); }
+}
+
+.aurora {
+  position: fixed;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.07;
+  pointer-events: none;
+  z-index: 0;
+  animation: aurora-float 8s ease-in-out infinite;
+}
+.aurora-1 { width:600px; height:600px; background:#6366f1; top:-150px; left:100px; animation-delay:0s; }
+.aurora-2 { width:500px; height:500px; background:#3b82f6; bottom:-100px; right:50px; animation-delay:-3s; }
+.aurora-3 { width:350px; height:350px; background:#8b5cf6; top:30%; left:40%; animation-delay:-5s; }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(59,130,246,.18); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(59,130,246,.35); }

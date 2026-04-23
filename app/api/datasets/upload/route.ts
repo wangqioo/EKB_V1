@@ -1,0 +1,50 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { getSession } from '@/lib/auth'
+import fs from 'fs'
+import path from 'path'
+
+const RAGFLOW_BASE = process.env.RAGFLOW_BASE_URL || 'http://localhost:8085'
+const API_KEY = process.env.RAGFLOW_API_KEY || 'ragflow-admin-api-key-2026'
+const META_FILE = path.join(process.cwd(), 'data', 'doc_meta.json')
+
+function readMeta(): Record<string, Record<string, unknown>> {
+  try { return JSON.parse(fs.readFileSync(META_FILE, 'utf-8')) } catch { return {} }
+}
+function writeMeta(data: Record<string, Record<string, unknown>>) {
+  const dir = path.dirname(META_FILE)
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(META_FILE, JSON.stringify(data, null, 2))
+}
+
+export async function POST(req: NextRequest) {
+  const user = await getSession()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const form = await req.formData()
+  const file = form.get('file') as File
+  const datasetId = form.get('datasetId') as string
+  const dept = (form.get('dept') as string) || ''
+  const type = (form.get('type') as string) || ''
+  const confidential = form.get('confidential') === 'true'
+  const ai_summary = (form.get('ai_summary') as string) || ''
+  const uploadedBy = user.id
+
+  const uploadForm = new FormData()
+  uploadForm.append('file', file)
+
+  const r = await fetch(`${RAGFLOW_BASE}/api/v1/datasets/${datasetId}/documents`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${API_KEY}` },
+    body: uploadForm,
+  })
+  const data = await r.json()
+
+  const docId = data.data?.[0]?.id
+  if (docId) {
+    const all = readMeta()
+    all[docId] = { dept, type, confidential, ai_summary, deleted: false, uploadedBy }
+    writeMeta(all)
+  }
+
+  return NextResponse.json(data)
+}
