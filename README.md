@@ -1,136 +1,91 @@
-# Enterprise KB - 企业知识库
+# enterprise-kb
 
-基于 [RAGFlow](https://github.com/infiniflow/ragflow) 的企业级智能知识管理与 AI 对话系统，使用 Next.js 14 构建。
+RAGFlow 的企业前端壳。RAGFlow 负责 RAG 引擎，这个项目负责多用户、权限管理和业务功能。
 
-## 功能特性
+## 它做什么
 
-- **知识库管理** — 创建/删除知识库，上传 PDF/Word/文本等文档，触发解析与向量化
-- **AI 智能对话** — 流式问答，基于 RAGFlow 检索增强生成（RAG），支持多轮会话
-- **GraphRAG** — 支持图谱化知识检索
-- **文件夹 & 收藏夹** — 对知识库文档进行分类整理与收藏
-- **回收站** — 软删除文档，支持恢复
-- **课程培训** — 创建带测验题的培训课程，追踪学习进度
-- **SOP 知识页** — 标准操作流程知识聚合页
-- **内容导入** — 支持微信公众号文章、音频文件自动导入知识库
-- **LinkBox** — 外部链接收藏与管理
-- **用户系统** — JWT 认证，多级权限（普通用户 / 管理员），管理后台
+RAGFlow 本身没有多用户、权限分级这些概念。这个项目套在 RAGFlow 外面，提供：
+
+- 用户注册/登录，分三级权限（只读 / 可上传 / 管理员）
+- 知识库和文档的增删查，底层调 RAGFlow API
+- AI 对话界面，流式输出，支持多 session
+- 文件夹、收藏夹、回收站整理文档
+- 企业培训模块：课程内容 + 测验题 + 进度记录
+- 微信公众号文章、音频文件自动导入知识库
+- GraphRAG 支持
+- SOP 知识聚合页
+- LinkBox 外链收藏
+- 管理后台管用户
 
 ## 技术栈
 
-| 层 | 技术 |
-|---|---|
-| 前端框架 | Next.js 14 (App Router) |
-| UI 样式 | Tailwind CSS |
-| 语言 | TypeScript |
-| 认证 | JWT（jose）+ HttpOnly Cookie |
-| AI 后端 | RAGFlow（Docker 部署） |
-| 存储 | 文件系统 JSON（用户/进度/收藏数据） |
+- **Next.js 14** App Router + TypeScript + Tailwind CSS
+- **认证**：JWT（jose）+ HttpOnly Cookie，用户数据存本地 JSON 文件
+- **AI**：调 RAGFlow HTTP API，SSE 流式转发给前端
+- **存储**：本地 JSON（users、folders、favorites、courses、progress）
+- **外部服务**：微信/音频导入走独立的 HUB_URL 服务
 
-## 快速开始
+## 前置条件
 
-### 前置条件
+需要一个跑起来的 RAGFlow 实例。Docker 快速部署：
 
-- Node.js 18+
-- 已运行的 [RAGFlow](https://github.com/infiniflow/ragflow) 实例
+```bash
+git clone https://github.com/infiniflow/ragflow.git
+cd ragflow/docker
+docker compose up -d
+```
 
-### 安装
+然后去 RAGFlow 管理界面拿 API Key。
 
-\`\`\`bash
+## 安装
+
+```bash
 git clone https://github.com/wangqioo/enterprise-kb.git
 cd enterprise-kb
 npm install
-\`\`\`
+```
 
-### 环境配置
+创建 `.env.local`：
 
-在项目根目录创建 `.env.local`：
-
-\`\`\`env
-# RAGFlow 实例地址
+```env
 RAGFLOW_BASE_URL=http://localhost:8085
+RAGFLOW_API_KEY=你的-ragflow-api-key
+JWT_SECRET=自定义签名密钥
+ADMIN_REGISTER_KEY=管理员注册邀请码
 
-# RAGFlow API Key（在 RAGFlow 管理界面获取）
-RAGFLOW_API_KEY=your-ragflow-api-key
-
-# JWT 签名密钥（自定义复杂字符串）
-JWT_SECRET=your-jwt-secret-here
-
-# 注册管理员账号时需要的校验码
-ADMIN_REGISTER_KEY=your-admin-key
-
-# 微信/音频导入服务地址（可选）
+# 可选，微信/音频导入服务
 HUB_URL=http://localhost:8096
-\`\`\`
+```
 
-### 启动
+启动：
 
-\`\`\`bash
-# 开发模式
-npm run dev
+```bash
+npm run dev    # 开发
+npm start      # 生产（需先 npm run build）
+```
 
-# 生产构建
-npm run build
-npm start
-\`\`\`
-
-默认在 `http://localhost:3009` 运行。
+默认端口 3009。
 
 ## 默认账号
 
-首次启动会自动在 `data/users.json` 创建默认账号：
+首次启动自动生成 `data/users.json`，内含两个初始账号：
 
 | 用户名 | 密码 | 角色 |
 |--------|------|------|
 | admin | admin2026 | 管理员 |
 | user | user2026 | 普通用户 |
 
-> 建议首次登录后立即修改密码。
+**上线前记得改密码。**
 
-## 权限说明
+## 权限
 
-| 权限级别 | 说明 |
-|---------|------|
-| 0 | 普通用户，只读访问 |
-| 1 | 可上传内容、导入文章 |
-| 2 | 管理员，全部权限 |
+| 级别 | 可做什么 |
+|------|---------|
+| 0 | 浏览、搜索、对话 |
+| 1 | 上传文档、导入文章 |
+| 2 | 全部权限 + 用户管理 |
 
-## 项目结构
-
-\`\`\`
-enterprise-kb/
-├── app/
-│   ├── api/                # Next.js API Routes
-│   │   ├── auth/           # 登录 / 登出 / 注册
-│   │   ├── datasets/       # 知识库 CRUD、文档管理
-│   │   ├── chat/           # 对话、流式输出、会话管理
-│   │   ├── courses/        # 培训课程
-│   │   ├── ingest/         # 微信/音频导入
-│   │   └── ...
-│   ├── library/            # 知识库页面
-│   ├── chat/               # AI 对话页面
-│   ├── training/           # 培训模块
-│   ├── sop/                # SOP 知识页
-│   ├── linkbox/            # LinkBox 页面
-│   └── admin/              # 管理后台
-├── components/             # 公共组件（NavBar、Sidebar）
-├── lib/
-│   ├── auth.ts             # 认证逻辑
-│   └── ragflow.ts          # RAGFlow API 封装
-├── data/                   # JSON 数据文件（运行时生成）
-└── public/                 # 静态资源
-\`\`\`
-
-## RAGFlow 部署参考
-
-使用 Docker Compose 快速部署 RAGFlow：
-
-\`\`\`bash
-git clone https://github.com/infiniflow/ragflow.git
-cd ragflow/docker
-docker compose up -d
-\`\`\`
-
-默认访问 `http://localhost:80`，创建 API Key 后填入 `.env.local`。
+注册时填写 `ADMIN_REGISTER_KEY` 可直接注册为管理员。
 
 ## License
 
