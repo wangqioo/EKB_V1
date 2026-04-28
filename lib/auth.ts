@@ -7,15 +7,26 @@ import crypto from 'node:crypto'
 const SECRET = new TextEncoder().encode(process.env.JWT_SECRET || 'ekb-secret-2026')
 const DATA_DIR = join(process.cwd(), 'data')
 const USERS_FILE = join(DATA_DIR, 'users.json')
+const DEPARTMENTS_FILE = join(DATA_DIR, 'departments.json')
+const INVITE_FILE = join(DATA_DIR, 'invite.json')
 const ADMIN_KEY = process.env.ADMIN_REGISTER_KEY || 'ENTERPRISE-ADMIN-2026'
 
 export interface StoredUser {
   id: string; name: string; password: string
   role: 'admin' | 'user'; permissionLevel: number
+  email?: string; phone?: string; department?: string
+  position?: string; employeeId?: string; createdAt?: string
 }
 export interface SessionUser {
   id: string; name: string
   role: 'admin' | 'user'; permissionLevel: number
+}
+export interface Department {
+  id: string; name: string; managerId?: string; createdAt: string
+}
+export interface InviteData {
+  token: string; createdAt: string
+  records: { userId: string; name: string; joinedAt: string }[]
 }
 
 function ensureDataDir() {
@@ -33,7 +44,6 @@ export function loadUsers(): Record<string, StoredUser> {
     return defaults
   }
   const users = JSON.parse(readFileSync(USERS_FILE, 'utf-8'))
-  // Migrate: ensure all users have permissionLevel
   let dirty = false
   for (const key of Object.keys(users)) {
     if (users[key].permissionLevel === undefined) {
@@ -48,6 +58,59 @@ export function loadUsers(): Record<string, StoredUser> {
 function saveUsers(users: Record<string, StoredUser>) {
   ensureDataDir()
   writeFileSync(USERS_FILE, JSON.stringify(users, null, 2))
+}
+
+export function loadDepartments(): Department[] {
+  ensureDataDir()
+  if (!existsSync(DEPARTMENTS_FILE)) {
+    writeFileSync(DEPARTMENTS_FILE, JSON.stringify([], null, 2))
+    return []
+  }
+  return JSON.parse(readFileSync(DEPARTMENTS_FILE, 'utf-8'))
+}
+
+export function saveDepartments(depts: Department[]) {
+  ensureDataDir()
+  writeFileSync(DEPARTMENTS_FILE, JSON.stringify(depts, null, 2))
+}
+
+export function loadInvite(): InviteData {
+  ensureDataDir()
+  if (!existsSync(INVITE_FILE)) {
+    const data: InviteData = {
+      token: crypto.randomBytes(8).toString('hex'),
+      createdAt: new Date().toISOString(),
+      records: [],
+    }
+    writeFileSync(INVITE_FILE, JSON.stringify(data, null, 2))
+    return data
+  }
+  return JSON.parse(readFileSync(INVITE_FILE, 'utf-8'))
+}
+
+export function saveInvite(data: InviteData) {
+  ensureDataDir()
+  writeFileSync(INVITE_FILE, JSON.stringify(data, null, 2))
+}
+
+export function resetInviteToken(): InviteData {
+  const data = loadInvite()
+  data.token = crypto.randomBytes(8).toString('hex')
+  data.createdAt = new Date().toISOString()
+  saveInvite(data)
+  return data
+}
+
+export function validateInviteToken(token: string): boolean {
+  const data = loadInvite()
+  return data.token === token
+}
+
+export function recordInviteUsage(userId: string, name: string) {
+  const data = loadInvite()
+  if (!data.records) data.records = []
+  data.records.push({ userId, name, joinedAt: new Date().toISOString() })
+  saveInvite(data)
 }
 
 function hashPassword(password: string): string {
@@ -75,11 +138,11 @@ export function verifyCredentials(username: string, password: string): SessionUs
 }
 
 export function registerUser(
-  username: string, password: string, name?: string, adminKey?: string
+  username: string, password: string, name?: string, adminKey?: string, inviteToken?: string
 ): { ok: boolean; error?: string; user?: SessionUser } {
   if (!username || username.length < 2) return { ok: false, error: '用户名至少2个字符' }
   if (!password || password.length < 6) return { ok: false, error: '密码至少6位' }
-  if (!/^[\w\u4e00-\u9fa5]+$/.test(username)) return { ok: false, error: '用户名只能包含字母、数字、下划线或中文' }
+  if (!/^[\w一-龥]+$/.test(username)) return { ok: false, error: '用户名只能包含字母、数字、下划线或中文' }
   const users = loadUsers()
   if (users[username]) return { ok: false, error: '用户名已存在' }
 
@@ -90,18 +153,68 @@ export function registerUser(
     role = 'admin'
     permissionLevel = 2
   }
+  if (inviteToken) {
+    if (!validateInviteToken(inviteToken)) return { ok: false, error: '邀请链接无效' }
+  }
 
   const displayName = name || username
-  users[username] = { id: username, name: displayName, password: hashPassword(password), role, permissionLevel }
+  users[username] = {
+    id: username, name: displayName, password: hashPassword(password),
+    role, permissionLevel, createdAt: new Date().toISOString(),
+  }
+  saveUsers(users)
+  if (inviteToken) recordInviteUsage(username, displayName)
+  return { ok: true, user: { id: username, name: displayName, role, permissionLevel } }
+}
+
+export function createUserByAdmin(
+  username: string,
+  password: string,
+  profile: {
+    name?: string; email?: string; phone?: string; department?: string
+    position?: string; employeeId?: string
+    role?: 'admin' | 'user'; permissionLevel?: number
+  }
+): { ok: boolean; error?: string; user?: SessionUser } {
+  if (!username || username.length < 2) return { ok: false, error: '用户名至少2个字符' }
+  if (!password || password.length < 6) return { ok: false, error: '密码至少6位' }
+  if (!/^[\w一-龥]+$/.test(username)) return { ok: false, error: '用户名只能包含字母、数字、下划线或中文' }
+  const users = loadUsers()
+  if (users[username]) return { ok: false, error: '用户名已存在' }
+
+  const role = profile.role || 'user'
+  const permissionLevel = profile.permissionLevel ?? (role === 'admin' ? 2 : 0)
+  const displayName = profile.name || username
+
+  users[username] = {
+    id: username, name: displayName, password: hashPassword(password),
+    role, permissionLevel,
+    email: profile.email || undefined,
+    phone: profile.phone || undefined,
+    department: profile.department || undefined,
+    position: profile.position || undefined,
+    employeeId: profile.employeeId || undefined,
+    createdAt: new Date().toISOString(),
+  }
   saveUsers(users)
   return { ok: true, user: { id: username, name: displayName, role, permissionLevel } }
 }
 
-export function updateUser(userId: string, updates: Partial<{ role: 'admin' | 'user'; permissionLevel: number }>): boolean {
+export function deleteUser(userId: string): boolean {
   const users = loadUsers()
   if (!users[userId]) return false
-  if (updates.role !== undefined) users[userId].role = updates.role
-  if (updates.permissionLevel !== undefined) users[userId].permissionLevel = updates.permissionLevel
+  delete users[userId]
+  saveUsers(users)
+  return true
+}
+
+export function updateUser(
+  userId: string,
+  updates: Partial<Pick<StoredUser, 'role' | 'permissionLevel' | 'name' | 'email' | 'phone' | 'department' | 'position' | 'employeeId'>>
+): boolean {
+  const users = loadUsers()
+  if (!users[userId]) return false
+  Object.assign(users[userId], updates)
   saveUsers(users)
   return true
 }
@@ -127,7 +240,7 @@ export async function getSession(): Promise<SessionUser | null> {
     const { payload } = await jwtVerify(token, SECRET)
     const p = payload as unknown as SessionUser
     if (p.permissionLevel === undefined) p.permissionLevel = p.role === 'admin' ? 2 : 0
-    _sessionCache.set(token, { session: p, exp: Date.now() + 60_000 })
+    _sessionCache.set(token, { session: p, exp: Date.now() + 300_000 })
     return p
   } catch {
     return null
@@ -138,4 +251,3 @@ export async function deleteSession() {
   const c = await cookies()
   c.delete('ekb_token')
 }
-

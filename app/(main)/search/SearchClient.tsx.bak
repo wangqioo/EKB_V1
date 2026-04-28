@@ -1,0 +1,682 @@
+'use client'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import React from 'react'
+
+interface Chunk {
+  id: string; docId: string; docName: string; datasetId: string
+  content: string; similarity: number
+}
+interface Dataset { id: string; name: string; description?: string; document_count?: number }
+interface Doc { id: string; name: string; size: number; run: string; create_date?: string; meta?: { dept?: string; type?: string; confidential?: boolean } }
+interface Folder { id: string; name: string; docIds: string[] }
+
+const DEPTS = ['行政部', '技术部', '市场部', '财务部', '人事部', '运营部', '法务部', '其他']
+const DOC_TYPES = ['SOP', '合同', '政策', '培训资料', '会议纪要', '技术文档', '报告', '表格', '其他']
+
+const STATUS_MAP: Record<string, { label: string; color: string; bg: string }> = {
+  DONE:    { label: '已完成', color: '#16a34a', bg: '#dcfce7' },
+  RUNNING: { label: '解析中', color: '#d97706', bg: '#fef9c3' },
+  PENDING: { label: '待处理', color: '#64748b', bg: '#f1f5f9' },
+  UNSTART: { label: '未开始', color: '#64748b', bg: '#f1f5f9' },
+  FAIL:    { label: '失败',   color: '#dc2626', bg: '#fee2e2' },
+}
+
+function getFileIcon(name: string) {
+  const ext = (name || '').split('.').pop()?.toLowerCase() || ''
+  if (ext === 'pdf') return { bg: '#fee2e2', color: '#dc2626', label: 'PDF' }
+  if (['doc', 'docx'].includes(ext)) return { bg: '#dbeafe', color: '#2563eb', label: 'DOC' }
+  if (['xls', 'xlsx', 'csv'].includes(ext)) return { bg: '#dcfce7', color: '#16a34a', label: 'XLS' }
+  if (['ppt', 'pptx'].includes(ext)) return { bg: '#ffedd5', color: '#ea580c', label: 'PPT' }
+  if (['md', 'txt'].includes(ext)) return { bg: '#f3e8ff', color: '#7c3aed', label: 'TXT' }
+  return { bg: '#f1f5f9', color: '#64748b', label: ext.toUpperCase().slice(0, 3) || 'FILE' }
+}
+
+function fmtSize(b?: number) {
+  if (!b) return '-'
+  if (b < 1024) return `${b}B`
+  if (b < 1048576) return `${(b / 1024).toFixed(1)}KB`
+  return `${(b / 1048576).toFixed(1)}MB`
+}
+
+function highlight(text: string, query: string): React.ReactNode[] {
+  if (!query.trim() || !text) return [text || '']
+  const words = query.trim().split(/\s+/).filter(Boolean)
+  const pattern = new RegExp(`(${words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi')
+  const parts = text.split(pattern)
+  return parts.map((part, i) =>
+    pattern.test(part)
+      ? <mark key={i} style={{ background: '#dbeafe', color: '#1d4ed8', borderRadius: 3, padding: '0 2px', fontWeight: 600 }}>{part}</mark>
+      : part
+  )
+}
+
+interface Props { userName: string; role: string; permissionLevel: number }
+
+export default function SearchClient({ userName, role, permissionLevel }: Props) {
+  const [query, setQuery] = useState('')
+  const [inputVal, setInputVal] = useState('')
+  const [chunks, setChunks] = useState<Chunk[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [datasets, setDatasets] = useState<Dataset[]>([])
+  const [selectedDs, setSelectedDs] = useState<string>('')
+  const [filterDept, setFilterDept] = useState('')
+  const [filterType, setFilterType] = useState('')
+  const [docMeta, setDocMeta] = useState<Record<string, { dept?: string; type?: string; confidential?: boolean }>>({})
+  const [showFilters, setShowFilters] = useState(false)
+
+  // Document browser state (browse mode)
+  const [docs, setDocs] = useState<Doc[]>([])
+  const [loadingDocs, setLoadingDocs] = useState(false)
+  const [folders, setFolders] = useState<Folder[]>([])
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null)
+
+  // Preview modal state
+  const [previewDoc, setPreviewDoc] = useState<Doc | null>(null)
+  const [previewContent, setPreviewContent] = useState('')
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const previewReqRef = useRef(0)
+
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    fetch('/api/datasets').then(r => r.json()).then(d => {
+      const list: Dataset[] = d.data || []
+      setDatasets(list)
+      // Don't auto-select first dataset - let user choose "全部知识库" by default
+    })
+    inputRef.current?.focus()
+  }, [])
+
+  // Load docs when dataset changes (browse mode)
+  useEffect(() => {
+    if (!selectedDs) { setDocs([]); setFolders([]); return }
+    setLoadingDocs(true)
+    fetch(`/api/datasets/docs?datasetId=${selectedDs}`)
+      .then(r => r.json())
+      .then(d => { setDocs(d.data || []); setLoadingDocs(false) })
+      .catch(() => setLoadingDocs(false))
+
+    // Load folders
+    fetch(`/api/folders?datasetId=${selectedDs}`)
+      .then(r => r.json())
+      .then(d => { setFolders(d.folders || []); setLoadingDocs(false) })
+      .catch(() => setLoadingDocs(false))
+  }, [selectedDs])
+
+  // Search when dataset changes or query exists
+  const doSearch = useCallback(async (q: string) => {
+    if (!q.trim()) { setChunks([]); setError(''); return }
+    setLoading(true); setError('')
+    const params = new URLSearchParams({ q })
+    if (selectedDs) params.set('datasetIds', selectedDs)
+    try {
+      const r = await fetch(`/api/search?${params}`)
+      const d = await r.json()
+      if (d.error) { setError(d.error); setChunks([]) }
+      else {
+        const cs: Chunk[] = (d.chunks || []).map((c: any) => ({
+          ...c,
+          docName: c.docName || '未知文档',
+        }))
+        setChunks(cs)
+        const docIds = Array.from(new Set(cs.map((c: Chunk) => c.docId)))
+        if (docIds.length > 0) {
+          fetch(`/api/doc-meta?docIds=${docIds.join(',')}`).then(r => r.json()).then(d => setDocMeta(d.data || {}))
+        }
+      }
+    } catch (err) {
+      setError('搜索请求失败，请稍后重试')
+    }
+    setLoading(false)
+  }, [selectedDs])
+
+  function handleSearch(e: React.FormEvent) {
+    e.preventDefault()
+    const q = inputVal.trim()
+    setQuery(q)
+    doSearch(q)
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter') { const q = inputVal.trim(); setQuery(q); doSearch(q) }
+  }
+
+  function clearSearch() {
+    setQuery(''); setInputVal(''); setChunks([]); setError('')
+    setTimeout(() => inputRef.current?.focus(), 0)
+  }
+
+  useEffect(() => { if (query) doSearch(query) }, [selectedDs, doSearch])
+
+  // Deduplicate chunks by document
+  const docMap = new Map<string, Chunk & { allChunks: Chunk[] }>()
+  for (const c of chunks) {
+    const existing = docMap.get(c.docId)
+    if (!existing || c.similarity > existing.similarity) {
+      docMap.set(c.docId, { ...c, allChunks: existing ? [...existing.allChunks, c] : [c] })
+    } else {
+      existing.allChunks.push(c)
+    }
+  }
+  let results = Array.from(docMap.values()).sort((a, b) => b.similarity - a.similarity)
+  if (filterDept) results = results.filter(r => docMeta[r.docId]?.dept === filterDept)
+  if (filterType) results = results.filter(r => docMeta[r.docId]?.type === filterType)
+  const hasFilters = filterDept || filterType
+
+  // Folder browsing helpers (browse mode)
+  const currentFolder = folders.find(f => f.id === currentFolderId) || null
+  const allFiledDocIds = new Set(folders.flatMap(f => f.docIds))
+  const unfiledDocs = docs.filter(d => !allFiledDocIds.has(d.id))
+  let browseDocs = currentFolderId ? docs.filter(d => currentFolder?.docIds.includes(d.id)) : unfiledDocs
+
+  // File preview handler
+  async function handlePreview(doc: Doc) {
+    setPreviewDoc(doc); setPreviewContent(''); setPreviewLoading(true)
+    const ext = doc.name.split('.').pop()?.toLowerCase() || ''
+    if (ext === 'pdf') {
+      setPreviewContent('__pdf__'); setPreviewLoading(false); return
+    }
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) {
+      setPreviewContent('__image__'); setPreviewLoading(false); return
+    }
+    const reqId = ++previewReqRef.current
+    try {
+      const r = await fetch(`/api/datasets/docs/download?datasetId=${selectedDs}&docId=${doc.id}`)
+      if (reqId !== previewReqRef.current) return
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}))
+        if (reqId !== previewReqRef.current) return
+        setPreviewContent(`⚠️ ${d.error || '无法加载预览'}`)
+        setPreviewLoading(false); return
+      }
+      if (['md', 'txt'].includes(ext)) {
+        const text = await r.text()
+        if (reqId !== previewReqRef.current) return
+        setPreviewContent(text.slice(0, 30000))
+      } else if (ext === 'csv') {
+        const text = await r.text()
+        if (reqId !== previewReqRef.current) return
+        setPreviewContent('__csv__:' + text.slice(0, 60000))
+      } else {
+        setPreviewContent('__binary__')
+      }
+    } catch (e) { if (reqId === previewReqRef.current) setPreviewContent('加载失败，请尝试下载') }
+    if (reqId === previewReqRef.current) setPreviewLoading(false)
+  }
+
+  function handleDownload(doc: Doc) {
+    const url = `/api/datasets/docs/download?datasetId=${selectedDs}&docId=${doc.id}`
+    const a = document.createElement('a'); a.href = url; a.download = doc.name
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  }
+
+  // Render preview content
+  function renderPreviewContent() {
+    if (!previewDoc) return null
+    const dlUrl = `/api/datasets/docs/download?datasetId=${selectedDs}&docId=${previewDoc.id}`
+
+    if (previewContent === '__pdf__') {
+      return <iframe src={dlUrl} style={{ width: '100%', height: '68vh', border: 'none', borderRadius: 6 }} title={previewDoc.name} />
+    }
+
+    if (previewContent === '__image__') {
+      return (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px 0' }}>
+          <img src={dlUrl} alt={previewDoc.name} style={{ maxWidth: '100%', maxHeight: '65vh', objectFit: 'contain', borderRadius: 6 }} />
+        </div>
+      )
+    }
+
+    if (previewContent.startsWith('__csv__:')) {
+      const csvData = previewContent.slice(8)
+      return (
+        <div style={{ overflow: 'auto', maxHeight: '70vh' }}>
+          <table style={{ borderCollapse: 'collapse', fontSize: 13, width: '100%' }}>
+            <thead>
+              <tr style={{ background: '#f8fafc' }}>
+                {csvData.split('\n')[0]?.split(',').map((h, i) => (
+                  <th key={i} style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'left', fontWeight: 600 }}>{h.trim()}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {csvData.split('\n').slice(1).map((row, ri) => (
+                <tr key={ri}>
+                  {row.split(',').map((cell, ci) => (
+                    <td key={ci} style={{ border: '1px solid #e2e8f0', padding: '4px 8px' }}>{cell.trim()}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )
+    }
+
+    if (previewContent === '__binary__') {
+      return <p style={{ color: '#64748b', textAlign: 'center', padding: '20px' }}>此文件类型不支持预览，请下载查看</p>
+    }
+
+    if (previewContent.startsWith('⚠️')) {
+      return <p style={{ color: '#dc2626', textAlign: 'center', padding: '20px' }}>{previewContent}</p>
+    }
+
+    // Plain text / markdown preview
+    return <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: 13, lineHeight: 1.7, maxHeight: '70vh', overflow: 'auto', padding: '12px' }}>{previewContent}</pre>
+  }
+
+  // Build breadcrumb path from root to current folder
+  function getBreadcrumbPath(): Array<{ id: string | null; name: string }> {
+    if (!currentFolderId || !selectedDs) return [{ id: null, name: '根目录' }]
+    
+    const ancestors: Array<{ id: string | null; name: string }> = []
+    let current: string | null = currentFolderId
+    
+    // Simple approach: root + current folder
+    // For nested folders we'd need a recursive tree structure
+    ancestors.unshift({ id: null, name: '根目录' })
+    const cf = folders.find(f => f.id === current)
+    if (cf) {
+      ancestors.push({ id: cf.id, name: cf.name })
+    }
+    
+    return ancestors
+  }
+
+  // Render folder item card (Apple-style)
+  function renderFolderCard(folder: Folder, isActive: boolean) {
+    const docCount = docs.filter(d => folder.docIds.includes(d.id)).length
+    return (
+      <div
+        key={folder.id}
+        onClick={() => setCurrentFolderId(folder.id)}
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 100,
+          height: 100,
+          background: isActive ? '#e8f4fd' : '#fff',
+          border: `2px solid ${isActive ? '#3b82f6' : '#e8edf5'}`,
+          borderRadius: 12,
+          cursor: 'pointer',
+          transition: 'all 0.15s',
+          boxShadow: isActive ? '0 2px 12px rgba(59,130,246,.15)' : '0 1px 4px rgba(59,130,246,.04)',
+        }}
+        onMouseEnter={e => {
+          if (!isActive) {
+            (e.currentTarget as any).style.setProperty('borderColor', '#c7d8f8')
+            (e.currentTarget as any).style.setProperty('boxShadow', '0 4px 16px rgba(59,130,246,.1)')
+          }
+        }}
+        onMouseLeave={e => {
+          if (!isActive) {
+            (e.currentTarget as any).style.setProperty('borderColor', '#e8edf5')
+            (e.currentTarget as any).style.setProperty('boxShadow', '0 1px 4px rgba(59,130,246,.04)')
+          }
+        }}
+      >
+        <svg style={{ width: 40, height: 40, color: isActive ? '#3b82f6' : '#fbbf24', marginBottom: 4 }} fill="currentColor" viewBox="0 0 24 24">
+          <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+        </svg>
+        <span style={{ fontSize: 11, fontWeight: 600, color: isActive ? '#2563eb' : '#475569', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%', padding: '0 4px' }}>
+          {folder.name}
+        </span>
+        <span style={{ fontSize: 10, color: '#94a3b8' }}>{docCount}</span>
+      </div>
+    )
+  }
+
+  return (
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', zIndex: 1 }}>
+
+        {/* Header */}
+        <div style={{ padding: '16px 28px 0', background: 'rgba(255,255,255,.75)', backdropFilter: 'blur(12px)', borderBottom: '1px solid rgba(59,130,246,.1)', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+            <div>
+              <h1 style={{ fontSize: 20, fontWeight: 800, color: '#0f172a', margin: 0, letterSpacing: '-0.01em' }}>知识检索</h1>
+              <p style={{ fontSize: 12, color: '#64748b', margin: '3px 0 0' }}>
+                {query ? `搜索「${query}」的结果` : '浏览知识库文档'}
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              {query && (
+                <button onClick={clearSearch}
+                  style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', background: '#f1f5f9', border: '1.5px solid #e2e8f0', borderRadius: 9, fontSize: 12, color: '#64748b', cursor: 'pointer' }}>
+                  ← 返回浏览
+                </button>
+              )}
+              {query && (
+                <button onClick={() => setShowFilters(v => !v)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', background: showFilters ? '#eff6ff' : '#fff', border: `1.5px solid ${showFilters ? '#93c5fd' : '#e2e8f0'}`, borderRadius: 9, fontSize: 12, fontWeight: 500, color: showFilters ? '#2563eb' : '#64748b', cursor: 'pointer' }}>
+                  <svg style={{ width: 13, height: 13 }} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L13 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 017 21v-7.586L3.293 6.707A1 1 0 013 6V4z" /></svg>
+                  筛选{hasFilters ? ` (${[filterDept, filterType].filter(Boolean).length})` : ''}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Search box */}
+          <form onSubmit={handleSearch}>
+            <div style={{ position: 'relative', marginBottom: 14 }}>
+              <svg style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', width: 16, height: 16, color: '#94a3b8', pointerEvents: 'none' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+              </svg>
+              <input ref={inputRef} value={inputVal} onChange={e => setInputVal(e.target.value)} onKeyDown={handleKeyDown}
+                placeholder="搜索文档内容、标题、关键词..."
+                style={{ width: '100%', padding: '12px 120px 12px 42px', borderRadius: 12, border: '1.5px solid #c7d8f8', fontSize: 14, color: '#0f172a', outline: 'none', background: '#fff', boxSizing: 'border-box', boxShadow: '0 1px 4px rgba(59,130,246,.08)', transition: 'border-color 0.2s' }}
+                onFocus={e => (e.target as HTMLInputElement).style.borderColor = '#3b82f6'}
+                onBlur={e => (e.target as HTMLInputElement).style.borderColor = '#c7d8f8'}
+              />
+              <button type="submit"
+                style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', padding: '7px 18px', background: 'linear-gradient(135deg,#2563eb,#6366f1)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                搜索
+              </button>
+            </div>
+          </form>
+
+          {/* Dataset tabs */}
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <button onClick={() => setSelectedDs('')}
+              style={{ padding: '7px 16px', border: 'none', fontSize: 13, fontWeight: selectedDs === '' ? 700 : 500, cursor: 'pointer', background: 'none', color: selectedDs === '' ? '#2563eb' : '#64748b', borderBottom: `2.5px solid ${selectedDs === '' ? '#2563eb' : 'transparent'}`, marginBottom: -1, transition: 'all 0.15s' }}>
+              全部知识库
+            </button>
+            {datasets.map(ds => (
+              <button key={ds.id} onClick={() => setSelectedDs(ds.id)}
+                style={{ padding: '7px 16px', border: 'none', fontSize: 13, fontWeight: selectedDs === ds.id ? 700 : 500, cursor: 'pointer', background: 'none', color: selectedDs === ds.id ? '#2563eb' : '#64748b', borderBottom: `2.5px solid ${selectedDs === ds.id ? '#2563eb' : 'transparent'}`, marginBottom: -1, transition: 'all 0.15s' }}>
+                {ds.name}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Filter bar (search mode only) */}
+        {query && showFilters && (
+          <div style={{ background: '#fff', borderBottom: '1px solid #e8edf5', padding: '10px 28px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', flexShrink: 0 }}>
+            <span style={{ fontSize: 12, color: '#64748b', fontWeight: 500 }}>筛选：</span>
+            <select value={filterDept} onChange={e => setFilterDept(e.target.value)}
+              style={{ padding: '5px 10px', borderRadius: 7, border: `1.5px solid ${filterDept ? '#3b82f6' : '#e2e8f0'}`, fontSize: 12, background: filterDept ? '#eff6ff' : '#f8fafc', color: filterDept ? '#2563eb' : '#64748b', outline: 'none', cursor: 'pointer' }}>
+              <option value=''>全部部门</option>
+              {DEPTS.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+            <select value={filterType} onChange={e => setFilterType(e.target.value)}
+              style={{ padding: '5px 10px', borderRadius: 7, border: `1.5px solid ${filterType ? '#3b82f6' : '#e2e8f0'}`, fontSize: 12, background: filterType ? '#eff6ff' : '#f8fafc', color: filterType ? '#2563eb' : '#64748b', outline: 'none', cursor: 'pointer' }}>
+              <option value=''>全部类型</option>
+              {DOC_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            {hasFilters && (
+              <button onClick={() => { setFilterDept(''); setFilterType('') }}
+                style={{ padding: '4px 10px', borderRadius: 6, border: '1.5px solid #fca5a5', background: '#fef2f2', color: '#ef4444', fontSize: 12, fontWeight: 500, cursor: 'pointer' }}>
+                清除
+              </button>
+            )}
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#94a3b8' }}>
+              {loading ? '检索中...' : results.length > 0 ? `找到 ${results.length} 份文档` : query ? '暂无结果' : ''}
+            </span>
+          </div>
+        )}
+
+        {/* Main body */}
+        <div style={{ flex: 1, overflow: 'auto', padding: '20px 28px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+          {/* ── Browse mode (no query) ── */}
+          {!query && (
+            <>
+              {!selectedDs ? (
+                /* No specific dataset selected */
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '60px 0' }}>
+                  <div style={{ width: 72, height: 72, borderRadius: '50%', background: 'linear-gradient(135deg,#eff6ff,#dbeafe)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 20, boxShadow: '0 4px 20px rgba(59,130,246,.12)' }}>
+                    <svg style={{ width: 32, height: 32, color: '#3b82f6' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+                    </svg>
+                  </div>
+                  <h2 style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', margin: '0 0 8px' }}>选择知识库或开始搜索</h2>
+                  <p style={{ fontSize: 13, color: '#64748b', margin: 0, lineHeight: 1.7, maxWidth: 340 }}>
+                    点击上方知识库标签浏览文档，或输入关键词进行全文语义检索
+                  </p>
+                </div>
+              ) : loadingDocs ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '60px 0', gap: 10, color: '#64748b', fontSize: 14 }}>
+                  <svg style={{ width: 16, height: 16, animation: 'spin 1s linear infinite' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 100 16 8 8 0 01-8-8z" />
+                  </svg>
+                  加载文档中...
+                </div>
+              ) : docs.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '60px 0', color: '#94a3b8', fontSize: 13 }}>
+                  <div style={{ fontSize: 36, marginBottom: 12 }}>📂</div>
+                  该知识库暂无文档
+                </div>
+              ) : (
+                <>
+                  {/* ── Breadcrumb navigation (Windows Explorer style) ── */}
+                  {currentFolderId && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '10px 16px', background: '#f8fafc', borderRadius: 10, border: '1px solid #e8edf5', flexShrink: 0 }}>
+                      <svg style={{ width: 14, height: 14, color: '#94a3b8', flexShrink: 0 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                      </svg>
+                      {getBreadcrumbPath().map((crumb, idx) => (
+                        <React.Fragment key={idx}>
+                          <button
+                            onClick={() => setCurrentFolderId(crumb.id)}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              padding: '3px 10px',
+                              background: crumb.id === currentFolderId ? '#eff6ff' : 'transparent',
+                              border: crumb.id === currentFolderId ? 'none' : 'none',
+                              borderRadius: 6,
+                              fontSize: 12,
+                              fontWeight: crumb.id === currentFolderId ? 700 : 500,
+                              color: crumb.id === currentFolderId ? '#2563eb' : '#475569',
+                              cursor: 'pointer',
+                              transition: 'all 0.15s',
+                            }}
+                            onMouseEnter={e => {
+                              if (crumb.id !== currentFolderId) {
+                                (e.currentTarget as HTMLElement).style.background = '#f1f5f9'
+                              }
+                            }}
+                            onMouseLeave={e => {
+                              if (crumb.id !== currentFolderId) {
+                                (e.currentTarget as HTMLElement).style.background = 'transparent'
+                              }
+                            }}
+                          >
+                            <svg style={{ width: 12, height: 12, color: crumb.id === currentFolderId ? '#3b82f6' : '#fbbf24', flexShrink: 0 }} fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+                            </svg>
+                            {crumb.name}
+                          </button>
+                          {idx < getBreadcrumbPath().length - 1 && (
+                            <svg style={{ width: 14, height: 14, color: '#cbd5e1', flexShrink: 0 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                            </svg>
+                          )}
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* ── Folder grid (Apple-style) - shown at root level ── */}
+                  {folders.length > 0 && !currentFolderId && (
+                    <div style={{ flexShrink: 0 }}>
+                      <div style={{ fontSize: 12, color: '#64748b', fontWeight: 500, marginBottom: 8, paddingLeft: 4 }}>
+                        📁 文件夹 ({folders.length})
+                      </div>
+                      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                        {folders.map(f => renderFolderCard(f, false))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Current folder info bar ── */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 4, borderBottom: '1px solid #f1f5f9', flexShrink: 0 }}>
+                    <span style={{ fontSize: 13, color: '#64748b', fontWeight: 500 }}>
+                      {currentFolderId ? `${currentFolder?.name} - ${browseDocs.length} 份文档` : `共 ${docs.length} 份文档`}
+                    </span>
+                  </div>
+
+                  {/* ── Document list ── */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {browseDocs.map(doc => {
+                      const fi = getFileIcon(doc.name)
+                      const st = STATUS_MAP[doc.run] || { label: doc.run, color: '#64748b', bg: '#f1f5f9' }
+                      return (
+                        <div key={doc.id}
+                          style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8edf5', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12, boxShadow: '0 1px 4px rgba(59,130,246,.04)', transition: 'all 0.15s', cursor: 'pointer' }}
+                          onMouseEnter={e => { (e.currentTarget as any).style.setProperty('borderColor', '#c7d8f8'); (e.currentTarget as any).style.setProperty('boxShadow', '0 4px 12px rgba(59,130,246,.08)') }}
+                          onMouseLeave={e => { (e.currentTarget as any).style.setProperty('borderColor', '#e8edf5'); (e.currentTarget as any).style.setProperty('boxShadow', '0 1px 4px rgba(59,130,246,.04)') }}
+                          onClick={() => handlePreview(doc)}
+                        >
+                          <div style={{ width: 36, height: 36, background: fi.bg, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                            <span style={{ fontSize: 11, fontWeight: 800, color: fi.color }}>{fi.label}</span>
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {doc.name}
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                              <span style={{ fontSize: 12, color: '#94a3b8' }}>{fmtSize(doc.size)}</span>
+                              {doc.meta?.dept && <span style={{ fontSize: 11, fontWeight: 500, padding: '1px 7px', borderRadius: 999, background: '#dbeafe', color: '#1d4ed8' }}>{doc.meta.dept}</span>}
+                              {doc.meta?.type && <span style={{ fontSize: 11, fontWeight: 500, padding: '1px 7px', borderRadius: 999, background: '#f3e8ff', color: '#7c3aed' }}>{doc.meta.type}</span>}
+                            </div>
+                          </div>
+                          <span style={{ fontSize: 11, fontWeight: 500, padding: '2px 8px', borderRadius: 999, background: st.bg, color: st.color, flexShrink: 0 }}>
+                            {st.label}
+                          </span>
+                          {/* Large download arrow button */}
+                          <button onClick={e => { e.stopPropagation(); handleDownload(doc) }}
+                            style={{ padding: '8px', borderRadius: 10, border: '1.5px solid #e2e8f0', background: '#fff', color: '#64748b', cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s' }}
+                            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#eff6ff'; (e.currentTarget as any).style.setProperty('borderColor', '#3b82f6'); (e.currentTarget as HTMLElement).style.color = '#2563eb' }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '#fff'; (e.currentTarget as any).style.setProperty('borderColor', '#e2e8f0'); (e.currentTarget as HTMLElement).style.color = '#64748b' }}>
+                            <svg style={{ width: 18, height: 18 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+            </>
+          )}
+
+          {/* ── Search mode ── */}
+          {query && (
+            <>
+              {loading && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '60px 0', gap: 12, color: '#64748b', fontSize: 14 }}>
+                  <svg style={{ width: 18, height: 18, animation: 'spin 1s linear infinite' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 100 16 8 8 0 01-8-8z" />
+                  </svg>
+                  正在语义检索...
+                </div>
+              )}
+              {error && !loading && (
+                <div style={{ padding: '14px 18px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, fontSize: 13, color: '#dc2626' }}>
+                  ⚠️ {error}
+                </div>
+              )}
+              {!loading && !error && results.length === 0 && (
+                <div style={{ textAlign: 'center', padding: '60px 0', color: '#94a3b8', fontSize: 13 }}>
+                  <div style={{ fontSize: 36, marginBottom: 12 }}>🔍</div>
+                  未找到与「{query}」相关的文档内容
+                </div>
+              )}
+              {!loading && results.map((chunk) => {
+                const fi = getFileIcon(chunk.docName)
+                const meta = docMeta[chunk.docId] || {}
+                const pct = Math.round((chunk.similarity || 0) * 100)
+                const raw = (chunk.content || '').replace(/<[^>]+>/g, '').trim()
+                const excerpt = raw.length > 280 ? raw.slice(0, 280) + '…' : raw
+                return (
+                  <div key={chunk.id}
+                    style={{ background: '#fff', borderRadius: 14, border: '1px solid #e8edf5', padding: '16px 20px', boxShadow: '0 2px 8px rgba(59,130,246,.05)', transition: 'all 0.2s', cursor: 'pointer' }}
+                    onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.boxShadow = '0 6px 24px rgba(59,130,246,.12)'; el.style.borderColor = '#c7d8f8'; el.style.transform = 'translateY(-1px)' }}
+                    onMouseLeave={e => { const el = e.currentTarget as HTMLElement; el.style.boxShadow = '0 2px 8px rgba(59,130,246,.05)'; el.style.borderColor = '#e8edf5'; el.style.transform = 'translateY(0)' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 10 }}>
+                      <div style={{ width: 38, height: 38, background: fi.bg, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        <span style={{ fontSize: 12, fontWeight: 800, color: fi.color }}>{fi.label}</span>
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>
+                          {highlight(chunk.docName, query)}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          {meta.dept && <span style={{ fontSize: 12, fontWeight: 500, padding: '1px 7px', borderRadius: 999, background: '#dbeafe', color: '#1d4ed8' }}>{meta.dept}</span>}
+                          {meta.type && <span style={{ fontSize: 12, fontWeight: 500, padding: '1px 7px', borderRadius: 999, background: '#f3e8ff', color: '#7c3aed' }}>{meta.type}</span>}
+                          {meta.confidential && <span style={{ fontSize: 12, fontWeight: 500, padding: '1px 7px', borderRadius: 999, background: '#fee2e2', color: '#dc2626' }}>🔒 机密</span>}
+                          <span style={{ fontSize: 12, color: '#94a3b8' }}>{chunk.allChunks.length} 个相关段落</span>
+                        </div>
+                      </div>
+                      <div style={{ flexShrink: 0, textAlign: 'right' }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: pct >= 80 ? '#16a34a' : pct >= 60 ? '#2563eb' : '#64748b' }}>{pct}%</div>
+                        <div style={{ fontSize: 10, color: '#94a3b8' }}>相关度</div>
+                        <div style={{ marginTop: 4, width: 48, height: 4, background: '#f1f5f9', borderRadius: 999, overflow: 'hidden' }}>
+                          <div style={{ height: '100%', borderRadius: 999, background: pct >= 80 ? 'linear-gradient(90deg,#16a34a,#22c55e)' : pct >= 60 ? 'linear-gradient(90deg,#2563eb,#6366f1)' : '#94a3b8', width: `${pct}%` }} />
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 13, color: '#475569', lineHeight: 1.75, padding: '10px 14px', background: '#f8fafc', borderRadius: 8, border: '1px solid #f1f5f9' }}>
+                      {highlight(excerpt, query)}
+                    </div>
+                    {chunk.allChunks.length > 1 && (
+                      <div style={{ marginTop: 8, fontSize: 12, color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <svg style={{ width: 12, height: 12 }} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                        另有 {chunk.allChunks.length - 1} 个相关段落命中
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+              {!loading && results.length > 0 && (
+                <div style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', padding: '8px 0 4px' }}>
+                  共找到 {results.length} 份文档中的 {chunks.length} 个相关段落
+                </div>
+              )}
+            </>
+          )}
+
+        </div>
+
+        {/* ── Preview Modal ── */}
+        {previewDoc && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }} onClick={() => setPreviewDoc(null)}>
+            <div style={{ background: '#fff', borderRadius: 16, width: '90vw', maxWidth: 900, maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 80px rgba(0,0,0,.3)' }} onClick={e => e.stopPropagation()}>
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid #e8edf5', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#0f172a' }}>{previewDoc.name}</h3>
+                  <p style={{ margin: '4px 0 0', fontSize: 12, color: '#94a3b8' }}>{fmtSize(previewDoc.size)}</p>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={() => handleDownload(previewDoc)}
+                    style={{ padding: '6px 14px', borderRadius: 8, border: '1.5px solid #e2e8f0', background: '#fff', color: '#64748b', fontSize: 13, cursor: 'pointer' }}>
+                    ⬇️ 下载
+                  </button>
+                  <button onClick={() => setPreviewDoc(null)}
+                    style={{ padding: '6px 12px', borderRadius: 8, border: 'none', background: '#f1f5f9', color: '#64748b', fontSize: 13, cursor: 'pointer' }}>
+                    ✕ 关闭
+                  </button>
+                </div>
+              </div>
+              <div style={{ padding: 20, overflow: 'auto', flex: 1 }}>
+                {previewLoading ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '60px 0', gap: 10, color: '#64748b' }}>
+                    <svg style={{ width: 20, height: 20, animation: 'spin 1s linear infinite' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 100 16 8 8 0 01-8-8z" />
+                    </svg>
+                    加载预览中...
+                  </div>
+                ) : renderPreviewContent()}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+  )
+}

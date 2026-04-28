@@ -1,0 +1,68 @@
+[
+  {
+    "id": "doc_e4fa7e08af35",
+    "title": "出游计划",
+    "description": "",
+    "status": "available",
+    "checkedOutBy": null,
+    "checkedOutAt": null,
+    "currentVersion": 1,
+    "createdBy": "白光宇",
+    "createdAt": "2026-04-25T06:34:25.446Z",
+    "versions": [
+      {
+        "v": 1,
+        "fileName": "EKB任务清单.docx",
+        "storedName": "v1.docx",
+        "size": 37602,
+        "uploadedBy": "白光宇",
+        "note": "初始版本",
+        "at": "2026-04-25T06:34:25.446Z"
+      }
+    ]
+  },
+  {
+    "id": "doc_ccd9340544b6",
+    "title": "文件2",
+    "description": "",
+    "status": "available",
+    "checkedOutBy": null,
+    "checkedOutAt": null,
+    "currentVersion": 1,
+    "createdBy": "白光宇",
+    "createdAt": "2026-04-24T11:35:39.173Z",
+    "versions": [
+      {
+        "v": 1,
+        "fileName": "ekb预览.html",
+        "storedName": "v1.html",
+        "size": 26150,
+        "uploadedBy": "白光宇",
+        "note": "初始版本",
+        "at": "2026-04-24T11:35:39.173Z"
+      }
+    ]
+  },
+  {
+    "id": "doc_87f2d067c1f7",
+    "title": "HV_Stress_table",
+    "description": "",
+    "status": "available",
+    "checkedOutBy": null,
+    "checkedOutAt": null,
+    "currentVersion": 1,
+    "createdBy": "白光宇",
+    "createdAt": "2026-04-24T11:34:44.773Z",
+    "versions": [
+      {
+        "v": 1,
+        "fileName": "账号管理.txt",
+        "storedName": "v1.txt",
+        "size": 0,
+        "uploadedBy": "白光宇",
+        "note": "初始版本",
+        "at": "2026-04-24T11:34:44.773Z"
+      }
+    ]
+  }
+]
