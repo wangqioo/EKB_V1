@@ -5,8 +5,8 @@ const RAGFLOW_BASE = process.env.RAGFLOW_BASE_URL || 'http://localhost:8085'
 const API_KEY = process.env.RAGFLOW_API_KEY || 'ragflow-admin-api-key-2026'
 
 const MODEL_MAP: Record<string, string> = {
-  qwen: 'Qwen2.5-VL-3B@local',
-  gemma4: 'gemma-4-26B-A4B-it-Q8_0.gguf___OpenAI-API',
+  qwen: 'deepseek-v4-flash',
+  gemma4: 'deepseek-v4-flash',
 }
 
 export async function PUT(req: NextRequest) {

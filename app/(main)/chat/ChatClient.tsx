@@ -302,8 +302,7 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
   const [loading, setLoading] = useState(false)
   const [initMsg, setInitMsg] = useState('')
   const [elapsed, setElapsed] = useState(0)
-  const [selectedModel, setSelectedModel] = useState<'qwen' | 'gemma4'>('qwen')
-  // deepThink state is local only — no RAGFlow API call needed
+  const [deepThinkEnabled, setDeepThinkEnabled] = useState(false)
 
   const [webSearchEnabled, setWebSearchEnabled] = useState(false)
   const [fileCount, setFileCount] = useState<number | null>(null)
@@ -339,7 +338,7 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
   useEffect(() => {
     fetch('/api/chat/session').then(r => r.json()).then(d => {
       const all: Assistant[] = d.data || []
-      const withKb = all.filter(a => a.dataset_ids && a.dataset_ids.length > 0)
+      const withKb = all
       const sorted = [...withKb.filter(a => a.name.includes('协会')), ...withKb.filter(a => !a.name.includes('协会'))]
       setAssistants(sorted)
       if (sorted.length > 0) setSelectedAsst(sorted[0].id)
@@ -446,7 +445,7 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
   }
 
   function toggleDeepThink() {
-    setSelectedModel(m => m === 'gemma4' ? 'qwen' : 'gemma4')
+    setDeepThinkEnabled(e => !e)
   }
 
   function startTimer() {
@@ -513,8 +512,8 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
     setMessages([...newMessages, { role: 'assistant', content: '', streaming: true }])
 
     try {
-      if (selectedModel === 'gemma4' && !webSearchEnabled) {
-        // ── Deep think path: RAGFlow retrieval → Spark1 35B generation ──
+      if (deepThinkEnabled && !webSearchEnabled) {
+        // ── Deep think path: RAGFlow retrieval → DeepSeek generation ──
         const r = await fetch('/api/chat/deepstream', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ question: userMsg, assistantId: selectedAsst }),
@@ -572,7 +571,7 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
 
         const r = await fetch('/api/chat/webstream', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: userMsg, webResults, model: selectedModel, searchQuery }),
+          body: JSON.stringify({ question: userMsg, webResults, model: 'deepseek', searchQuery }),
         })
         if (!r.ok || !r.body) {
           const d = await r.json().catch(() => ({}))
@@ -703,7 +702,7 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
 
   const showWelcome = messages.length === 0
 
-  const deepThinkActive = selectedModel === 'gemma4'
+  const deepThinkActive = deepThinkEnabled
 
   const currentAsstName = assistants.find(a => a.id === selectedAsst)?.name || '智能助手'
 
@@ -860,7 +859,7 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
                     {/* 深度思考 button */}
                     <button
                       onClick={toggleDeepThink}
-                      title={deepThinkActive ? '35B 推理模型已开启，点击切回快速模式' : '切换到 Spark1 · 35B 深度推理模型'}
+                      title={deepThinkActive ? '深度推理已开启，点击切回快速模式' : '切换到深度推理模式 · DeepSeek V4 Flash'}
                       style={{
                         padding: '5px 11px', borderRadius: 10, fontSize: 12, fontWeight: 500,
                         cursor: 'pointer', transition: 'all 0.2s',
@@ -875,7 +874,7 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
                       <svg style={{ width: 13, height: 13 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                       </svg>
-                      深度思考 (35B)
+                      深度思考
                     </button>
 
                     {/* 联网搜索 button */}
@@ -929,7 +928,7 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
                 <div style={{ display: 'flex', gap: 6, marginTop: 6, justifyContent: 'center' }}>
                   {deepThinkActive && (
                     <span style={{ fontSize: 11, color: '#7c3aed', background: 'rgba(124,58,237,0.07)', padding: '2px 8px', borderRadius: 12, border: '1px solid rgba(124,58,237,0.15)' }}>
-                      🔮 深度思考已开启 · Qwen3.6-35B on Spark1
+                      🔮 深度思考已开启 · DeepSeek V4 Flash
                     </span>
                   )}
                   {webSearchEnabled && (

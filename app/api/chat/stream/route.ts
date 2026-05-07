@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
     ragRes = await fetch(`${RAGFLOW_BASE}/api/v1/chats/${assistantId}/completions`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, session_id: sessionId, stream: true }),
+      body: JSON.stringify({ messages: [{ role: 'user', content: question }], stream: true }),
       signal: AbortSignal.timeout(STREAM_TIMEOUT_MS),
     })
   } catch (err: unknown) {

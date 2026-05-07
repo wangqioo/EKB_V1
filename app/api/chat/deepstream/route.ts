@@ -3,7 +3,8 @@ import { getSession } from '@/lib/auth'
 
 const RAGFLOW_BASE = process.env.RAGFLOW_BASE_URL || 'http://localhost:8085'
 const API_KEY = process.env.RAGFLOW_API_KEY || 'ragflow-admin-api-key-2026'
-const SPARK1_BASE = 'http://150.158.146.192:6139/v1'
+const DEEPSEEK_BASE = 'https://api.deepseek.com/v1'
+const DEEPSEEK_KEY = process.env.DEEPSEEK_API_KEY || 'sk-54d47d0943ca4472b33b2fe757c59a13'
 
 async function getFirstModel(base: string): Promise<string> {
   try {
@@ -117,7 +118,7 @@ export async function POST(req: NextRequest) {
     : '你是企业知识库AI助手，擅长深度分析与推理。当前知识库中未检索到相关内容，请根据你的知识回答用户问题。'
 
   // ── Step 4: call Spark1 35B model ──
-  const modelName = await getFirstModel(SPARK1_BASE)
+  const modelName = 'deepseek-v4-flash'
 
   const errSSE = (msg: string) =>
     new Response(
@@ -127,9 +128,9 @@ export async function POST(req: NextRequest) {
 
   let llmRes: Response
   try {
-    llmRes = await fetch(`${SPARK1_BASE}/chat/completions`, {
+    llmRes = await fetch(`${DEEPSEEK_BASE}/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer no-key' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_KEY}` },
       body: JSON.stringify({
         model: modelName,
         messages: [

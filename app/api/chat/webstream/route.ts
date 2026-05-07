@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const LLM_ENDPOINTS: Record<string, { base: string }> = {
-  qwen:   { base: 'http://localhost:8086/v1' },
-  gemma4: { base: 'http://150.158.146.192:6139/v1' },
-}
+const LLM_BASE = 'https://api.deepseek.com/v1'
+const LLM_API_KEY = process.env.DEEPSEEK_API_KEY || 'sk-54d47d0943ca4472b33b2fe757c59a13'
 
 async function getFirstModel(base: string): Promise<string> {
   try {
@@ -71,14 +69,13 @@ export async function POST(req: NextRequest) {
     ? `你是企业知识库AI助手，已执行联网搜索（关键词：${usedQuery}）。搜索结果如下：\n\n${webContext}\n\n请基于搜索结果回答用户原始问题。规则：结果相关时优先使用并标注引用序号[1][2]；结果不相关时忽略并直接用知识回答说明情况；用自己语言组织回答。`
     : '你是企业知识库AI助手，联网搜索无结果，请直接根据知识回答，并说明信息来自训练数据。'
 
-  const { base } = LLM_ENDPOINTS[model] || LLM_ENDPOINTS.qwen
-  const modelName = await getFirstModel(base)
+  const modelName = 'deepseek-v4-flash'
   
   let llmRes: Response
   try {
-    llmRes = await fetch(`${base}/chat/completions`, {
+    llmRes = await fetch(`${LLM_BASE}/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer no-key' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${LLM_API_KEY}` },
       body: JSON.stringify({
         model: modelName,
         messages: [

@@ -81,7 +81,7 @@ export async function* streamChat(assistantId: string, sessionId: string, questi
   const r = await fetch(`${RAGFLOW_BASE}/api/v1/chats/${assistantId}/completions`, {
     method: 'POST',
     headers: headers(),
-    body: JSON.stringify({ question, session_id: sessionId, stream: true }),
+    body: JSON.stringify({ messages: [{ role: 'user', content: question }], stream: true }),
   })
   if (!r.body) return
   const reader = r.body.getReader()
