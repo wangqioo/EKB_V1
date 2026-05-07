@@ -1,5 +1,5 @@
 const RAGFLOW_BASE = process.env.RAGFLOW_BASE_URL || 'http://localhost:8085'
-const RAGFLOW_API_KEY = process.env.RAGFLOW_API_KEY || 'ragflow-admin-api-key-2026'
+const RAGFLOW_API_KEY = process.env.RAGFLOW_API_KEY || 'ekb-api-8e5f1b6787684180b54a'
 
 const headers = () => ({
   'Authorization': `Bearer ${RAGFLOW_API_KEY}`,
