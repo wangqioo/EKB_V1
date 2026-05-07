@@ -10,6 +10,8 @@ interface WebRef { title: string; url: string; snippet: string }
 interface Message {
   role: 'user' | 'assistant'
   content: string
+  thinking?: string
+  thinkingDone?: boolean
   refs?: Ref[]
   webRefs?: WebRef[]
   streaming?: boolean
@@ -47,7 +49,12 @@ function parseInline(text: string): React.ReactNode[] {
 }
 
 function MarkdownText({ text }: { text: string }) {
-  const lines = text.split('\n')
+  // Strip inline thinking patterns that models might output directly in content
+  const cleaned = text
+    .replace(/<thought[^>]*>[\s\S]*?<\/thought>/g, '')
+    .replace(/【思考】[\s\S]*?【\/思考】/g, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/g, '')
+  const lines = cleaned.split('\n')
   const elements: React.ReactNode[] = []
   let i = 0
   while (i < lines.length) {
@@ -109,6 +116,45 @@ function DocModal({ docName, datasetId, docId, onClose }: { docName: string; dat
             : <pre style={{ fontSize: 13, color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'inherit', lineHeight: 1.7, margin: 0 }}>{content}</pre>}
         </div>
       </div>
+    </div>
+  )
+}
+
+function ThinkingBlock({ thinking, done }: { thinking: string; done?: boolean }) {
+  const [expanded, setExpanded] = useState(!done)
+  useEffect(() => { if (done) setExpanded(false) }, [done])
+  if (!thinking) return null
+  return (
+    <div style={{ marginBottom: expanded ? 8 : 0 }}>
+      <button
+        onClick={() => setExpanded(e => !e)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px',
+          borderRadius: 8, border: '1px solid #d8b4fe', cursor: 'pointer',
+          background: expanded ? 'rgba(124,58,237,0.06)' : 'rgba(124,58,237,0.03)',
+          fontSize: 12, fontWeight: 500, color: '#7c3aed',
+          transition: 'all 0.15s', width: '100%', textAlign: 'left',
+        }}
+        onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.background = 'rgba(124,58,237,0.08)' }}
+        onMouseLeave={e => { const el = e.currentTarget as HTMLElement; el.style.background = expanded ? 'rgba(124,58,237,0.06)' : 'rgba(124,58,237,0.03)' }}
+      >
+        <svg style={{ width: 14, height: 14, flexShrink: 0 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+        </svg>
+        <span style={{ flex: 1 }}>思考过程{done ? '（已完成）' : '...'}</span>
+        <span style={{ fontSize: 11, opacity: 0.6 }}>{expanded ? '▴ 收起' : '▸ 展开'}</span>
+      </button>
+      {expanded && (
+        <div style={{
+          marginTop: 6, padding: '10px 14px', borderRadius: 10,
+          background: 'rgba(124,58,237,0.04)', border: '1px solid rgba(124,58,237,0.1)',
+          fontSize: 13, color: '#6b21a8', lineHeight: 1.6,
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          maxHeight: 360, overflowY: 'auto',
+        }}>
+          {thinking}
+        </div>
+      )}
     </div>
   )
 }
@@ -527,7 +573,7 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
         }
         const reader = r.body.getReader()
         const decoder = new TextDecoder()
-        let buffer = '', fullText = '', refs: Ref[] = []
+        let buffer = '', fullText = '', refs: Ref[] = [], thinkingText = ''
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
@@ -543,7 +589,11 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
               const delta = obj.data?.answer
               if (delta && typeof delta === 'string') {
                 fullText += delta
-                setMessages([...newMessages, { role: 'assistant', content: fullText, streaming: true }])
+                setMessages([...newMessages, { role: 'assistant', content: fullText, thinking: thinkingText || undefined, streaming: true }])
+              }
+              if (obj.data?.thinking) {
+                thinkingText += obj.data.thinking
+                setMessages([...newMessages, { role: 'assistant', content: fullText, thinking: thinkingText, streaming: true }])
               }
               if (obj.data?.final === true && obj.data?.reference?.chunks?.length > 0) refs = obj.data.reference.chunks
             } catch {}
@@ -552,6 +602,8 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
         const finalMsg: Message = {
           role: 'assistant',
           content: fullText || '知识库中未找到相关内容，请换个问题描述。',
+          thinking: thinkingText || undefined,
+          thinkingDone: true,
           refs: refs.length > 0 ? refs : undefined,
         }
         const updated = [...newMessages, finalMsg]
@@ -582,7 +634,7 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
         }
         const reader = r.body.getReader()
         const decoder = new TextDecoder()
-        let buffer = '', fullText = ''
+        let buffer = '', fullText = '', thinkingText = ''
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
@@ -598,7 +650,11 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
               const delta = obj.data?.answer
               if (delta && typeof delta === 'string') {
                 fullText += delta
-                setMessages([...newMessages, { role: 'assistant', content: fullText, streaming: true }])
+                setMessages([...newMessages, { role: 'assistant', content: fullText, thinking: thinkingText || undefined, streaming: true }])
+              }
+              if (obj.data?.thinking) {
+                thinkingText += obj.data.thinking
+                setMessages([...newMessages, { role: 'assistant', content: fullText, thinking: thinkingText, streaming: true }])
               }
             } catch {}
           }
@@ -606,6 +662,8 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
         const finalMsg: Message = {
           role: 'assistant',
           content: fullText || '联网搜索未找到相关内容，请换个问题描述。',
+          thinking: thinkingText || undefined,
+          thinkingDone: true,
           webRefs: webResults.length > 0 ? webResults : undefined,
         }
         const updated = [...newMessages, finalMsg]
@@ -627,7 +685,7 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
         }
         const reader = r.body.getReader()
         const decoder = new TextDecoder()
-        let buffer = '', fullText = '', refs: Ref[] = []
+        let buffer = '', fullText = '', refs: Ref[] = [], thinkingText = ''
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
@@ -643,7 +701,11 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
               const delta = obj.data?.answer
               if (delta && typeof delta === 'string') {
                 fullText += delta
-                setMessages([...newMessages, { role: 'assistant', content: fullText, streaming: true }])
+                setMessages([...newMessages, { role: 'assistant', content: fullText, thinking: thinkingText || undefined, streaming: true }])
+              }
+              if (obj.data?.thinking) {
+                thinkingText += obj.data.thinking
+                setMessages([...newMessages, { role: 'assistant', content: fullText, thinking: thinkingText, streaming: true }])
               }
               if (obj.data?.final === true && obj.data?.reference?.chunks?.length > 0) refs = obj.data.reference.chunks
             } catch {}
@@ -652,6 +714,8 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
         const finalMsg: Message = {
           role: 'assistant',
           content: fullText || '知识库中未找到相关内容，请尝试换个问题描述。',
+          thinking: thinkingText || undefined,
+          thinkingDone: true,
           refs: refs.length > 0 ? refs : undefined,
         }
         const updated = [...newMessages, finalMsg]
@@ -766,6 +830,9 @@ export default function ChatClient({ userId, userName, role, permissionLevel }: 
                             }}>AI</div>
                             <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{currentAsstName}</span>
                           </div>
+                        )}
+                        {msg.role === 'assistant' && msg.thinking && (
+                          <ThinkingBlock thinking={msg.thinking} done={msg.thinkingDone} />
                         )}
                         <div style={{
                           borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '4px 16px 16px 16px',

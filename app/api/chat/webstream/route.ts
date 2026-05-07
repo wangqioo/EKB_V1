@@ -21,6 +21,7 @@ async function* convertStream(body: ReadableStream<Uint8Array>): AsyncGenerator<
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
+  let thinkingFinished = false
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
@@ -31,23 +32,34 @@ async function* convertStream(body: ReadableStream<Uint8Array>): AsyncGenerator<
       if (!line.startsWith('data:')) continue
       const raw = line.slice(5).trim()
       if (raw === '[DONE]') {
-        yield `data: ${JSON.stringify({ data: { answer: '', final: true, reference: {} } })}\n\n`
+        yield `data: ${JSON.stringify({ data: { answer: '', final: true, reference: {}, thinkingDone: thinkingFinished } })}\n\n`
         return
       }
       try {
         const obj = JSON.parse(raw)
-        const delta = obj.choices?.[0]?.delta?.content
-        if (delta) {
-          yield `data: ${JSON.stringify({ data: { answer: delta, final: false, reference: {} } })}\n\n`
+        const choice = obj.choices?.[0]
+        // Extract reasoning_content (DeepSeek thinking chain)
+        const thinkingDelta = choice?.delta?.reasoning_content
+        if (thinkingDelta) {
+          yield `data: ${JSON.stringify({ data: { answer: '', thinking: thinkingDelta, final: false, reference: {} } })}\n\n`
+          continue
         }
-        if (obj.choices?.[0]?.finish_reason === 'stop') {
-          yield `data: ${JSON.stringify({ data: { answer: '', final: true, reference: {} } })}\n\n`
+        // If reasoning_content went null after being set, thinking is done
+        if (thinkingFinished === false && choice?.delta?.content && choice?.delta?.reasoning_content === undefined) {
+          thinkingFinished = true
+        }
+        const contentDelta = choice?.delta?.content
+        if (contentDelta) {
+          yield `data: ${JSON.stringify({ data: { answer: contentDelta, final: false, reference: {}, thinkingDone: thinkingFinished } })}\n\n`
+        }
+        if (choice?.finish_reason === 'stop') {
+          yield `data: ${JSON.stringify({ data: { answer: '', final: true, reference: {}, thinkingDone: thinkingFinished } })}\n\n`
           return
         }
       } catch {}
     }
   }
-  yield `data: ${JSON.stringify({ data: { answer: '', final: true, reference: {} } })}\n\n`
+  yield `data: ${JSON.stringify({ data: { answer: '', final: true, reference: {}, thinkingDone: thinkingFinished } })}\n\n`
 }
 
 export async function POST(req: NextRequest) {

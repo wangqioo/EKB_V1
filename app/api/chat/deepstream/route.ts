@@ -160,10 +160,11 @@ export async function POST(req: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       let buf = ''
+      let thinkingFinished = false
 
       const sendFinal = () => {
         const payload = JSON.stringify({
-          data: { answer: '', final: true, reference: { chunks } },
+          data: { answer: '', final: true, reference: { chunks }, thinkingDone: thinkingFinished },
         })
         controller.enqueue(enc.encode(`data: ${payload}\n\ndata: true\n\n`))
         controller.close()
@@ -183,12 +184,24 @@ export async function POST(req: NextRequest) {
           if (raw === '[DONE]') { sendFinal(); return }
           try {
             const obj = JSON.parse(raw)
-            const delta = obj.choices?.[0]?.delta?.content
-            if (delta) {
-              const chunk = JSON.stringify({ data: { answer: delta, final: false, reference: {} } })
+            const choice = obj.choices?.[0]
+            // Extract reasoning_content (DeepSeek thinking chain)
+            const thinkingDelta = choice?.delta?.reasoning_content
+            if (thinkingDelta) {
+              const chunk = JSON.stringify({ data: { answer: '', thinking: thinkingDelta, final: false, reference: {} } })
+              controller.enqueue(enc.encode(`data: ${chunk}\n\n`))
+              continue
+            }
+            // If reasoning_content went null after being set, thinking is done
+            if (thinkingFinished === false && choice?.delta?.content && choice?.delta?.reasoning_content === undefined) {
+              thinkingFinished = true
+            }
+            const contentDelta = choice?.delta?.content
+            if (contentDelta) {
+              const chunk = JSON.stringify({ data: { answer: contentDelta, final: false, reference: {}, thinkingDone: thinkingFinished } })
               controller.enqueue(enc.encode(`data: ${chunk}\n\n`))
             }
-            if (obj.choices?.[0]?.finish_reason === 'stop') { sendFinal(); return }
+            if (choice?.finish_reason === 'stop') { sendFinal(); return }
           } catch {}
         }
       }

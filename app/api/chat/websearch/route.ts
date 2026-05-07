@@ -79,6 +79,42 @@ async function searchBing(query: string): Promise<SearchResult[]> {
   return results
 }
 
+// ── Sogou HTML scraper (fallback for China) ────────────────────────────────
+async function searchSogou(query: string): Promise<SearchResult[]> {
+  const url = `https://www.sogou.com/web?query=${encodeURIComponent(query)}&ie=utf8`
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    },
+    signal: AbortSignal.timeout(10000),
+  })
+  const html = await res.text()
+  const results: SearchResult[] = []
+
+  // Sogou results: <div class="vrwrap"> or <div class="rb">
+  const blockRe = /<div[^>]*class="[^"]*(?:vrwrap|rb)[^"]*"[^>]*>([\s\S]*?)<\/div>/g
+  let m: RegExpExecArray | null
+  while ((m = blockRe.exec(html)) !== null && results.length < 6) {
+    const block = m[1]
+    const titleM = block.match(/<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/)
+    const snippetM = block.match(/<p[^>]*class="[^"]*(?:str_info|star-wiki|str-text)[^"]*"[^>]*>([\s\S]*?)<\/p>/)
+      || block.match(/<div[^>]*class="[^"]*space-txt[^"]*"[^>]*>([\s\S]*?)<\/div>/)
+    if (titleM) {
+      const url = titleM[1]
+      const title = titleM[2].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&\w+;/g, ' ').replace(/<em>/g, '').replace(/<\/em>/g, '').trim()
+      const snippet = snippetM
+        ? snippetM[1].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&\w+;/g, ' ').replace(/\s+/g, ' ').replace(/<em>/g, '').replace(/<\/em>/g, '').trim()
+        : ''
+      if (title && url.startsWith('http')) {
+        results.push({ title, url, snippet: snippet.slice(0, 400) })
+      }
+    }
+  }
+  return results
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
   const session = await getSession()
@@ -92,9 +128,14 @@ export async function GET(req: NextRequest) {
   try {
     let results = await searchBing(searchQuery)
 
+    // Fallback to Sogou if Bing returns no results
+    if (results.length === 0) {
+      results = await searchSogou(searchQuery)
+    }
+
     // If results are poor, retry with original raw query (in case preprocessing was wrong)
     if (scoreRelevance(results, searchQuery) < 0.3 && searchQuery !== raw) {
-      const rawResults = await searchBing(raw)
+      const rawResults = results.length === 0 ? await searchSogou(raw) : await searchBing(raw)
       if (scoreRelevance(rawResults, searchQuery) > scoreRelevance(results, searchQuery)) {
         results = rawResults
       }
